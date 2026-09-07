@@ -5,8 +5,6 @@ print("Script started")
 from sentence_transformers import SentenceTransformer
 print("Import successful")
 
-
-
 def extract_text(pdf_path):
     reader = PdfReader(pdf_path)
     text = ""

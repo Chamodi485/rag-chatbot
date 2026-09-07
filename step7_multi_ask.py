@@ -9,20 +9,22 @@ client_ai = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 model = SentenceTransformer('all-MiniLM-L6-v2')
 client = chromadb.PersistentClient(path="./chroma_db")
-collection = client.get_collection(name="my_document")
+collection = client.get_collection(name="multi_docs")  # the new multi-doc collection
 
 def ask(question, n_results=3):
-    # Step 1: Embed the question using the same model used for the chunks
     query_embedding = model.encode([question]).tolist()
 
-    # Step 2: Retrieve the most relevant chunks from Chroma
-    results = collection.query(query_embeddings=query_embedding, n_results=n_results)
-    retrieved_chunks = results['documents'][0]
+    # Notice: we now also request 'metadatas' so we get the source filename back
+    results = collection.query(
+        query_embeddings=query_embedding,
+        n_results=n_results
+    )
 
-    # Step 3: Build context from retrieved chunks
+    retrieved_chunks = results['documents'][0]
+    retrieved_sources = results['metadatas'][0]  # list of {"source": filename} dicts
+
     context = "\n\n".join(retrieved_chunks)
 
-    # Step 4: Build the prompt
     prompt = f"""Answer the question using ONLY the context below.
 If the answer isn't in the context, say "I don't have enough information to answer that."
 
@@ -33,16 +35,14 @@ Question: {question}
 
 Answer:"""
 
-    # Step 5: Generate answer using Groq
     response = client_ai.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model="openai/gpt-oss-20b",
         messages=[{"role": "user", "content": prompt}]
     )
-    return response.choices[0].message.content, retrieved_chunks
+    return response.choices[0].message.content, retrieved_chunks, retrieved_sources
 
 
-# Interactive loop — ask as many questions as you want without editing code
-print("RAG Chatbot ready. Type your question, or 'exit' to quit.\n")
+print("Multi-document RAG Chatbot ready. Type your question, or 'exit' to quit.\n")
 
 while True:
     question = input("You: ")
@@ -51,10 +51,11 @@ while True:
         print("Goodbye!")
         break
 
-    answer, sources = ask(question)
+    answer, sources, metadata = ask(question)
 
     print(f"\nBot: {answer}\n")
     print("--- Sources used ---")
-    for i, chunk in enumerate(sources):
-        print(f"[{i+1}] {chunk[:150]}...")
-    print("\n" + "-"*50 + "\n")
+    for i, (chunk, meta) in enumerate(zip(sources, metadata), 1):
+        print(f"[{i}] From: {meta['source']}")
+        print(f"    {chunk.strip()}...")
+    print()
