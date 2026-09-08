@@ -16,15 +16,55 @@ st.caption("Ask questions - answers are grounded only in the actual course mater
 
 DOCS_FOLDER = "documents"
 
+def get_groq_key():
+    try:
+        return st.secrets["GROQ_API_KEY"]
+    except (FileNotFoundError, KeyError):
+        return os.getenv("GROQ_API_KEY")
+
+    
 @st.cache_resource
 def load_resources():
-    client_ai = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    client_ai = Groq(api_key=get_groq_key())
     model = SentenceTransformer('all-MiniLM-L6-v2')
     client = chromadb.PersistentClient(path="./chroma_db")
     collection = client.get_or_create_collection(name="multi_docs")
     return client_ai, model, client, collection
 
 client_ai, model, chroma_client, collection = load_resources()
+
+def auto_ingest_existing_documents():
+    """On first run (empty database), automatically process all PDFs
+    already sitting in the documents/ folder from the GitHub repo."""
+    if collection.count() > 0:
+        return  # Already has data, skip
+
+    if not os.path.exists(DOCS_FOLDER):
+        return
+
+    pdf_files = [f for f in os.listdir(DOCS_FOLDER) if f.endswith(".pdf")]
+    if not pdf_files:
+        return
+
+    with st.spinner(f"First-time setup: processing {len(pdf_files)} document(s)..."):
+        for filename in pdf_files:
+            filepath = os.path.join(DOCS_FOLDER, filename)
+            text = extract_text(filepath)
+            raw_chunks = splitter.split_text(text)
+            useful_chunks = [c for c in raw_chunks if is_useful_chunk(c)]
+
+            if not useful_chunks:
+                continue
+
+            embeddings = model.encode(useful_chunks).tolist()
+            ids = [f"{filename}_chunk_{i}" for i in range(len(useful_chunks))]
+            metadatas = [{"source": filename} for _ in useful_chunks]
+
+            collection.add(ids=ids, embeddings=embeddings, documents=useful_chunks, metadatas=metadatas)
+
+    st.success(f"Loaded {collection.count()} chunks from {len(pdf_files)} document(s)")
+
+auto_ingest_existing_documents()
 
 splitter = RecursiveCharacterTextSplitter(
     chunk_size=500, chunk_overlap=50,
